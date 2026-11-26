@@ -21,9 +21,11 @@ android {
         // Stable v1 starts a clean Android application identity so it can coexist
         // with the historical pre-release package com.rp5np.systemshock.
         applicationId "io.github.raposomiguel50.systemshock"
+        // PortHub build: installs next to the original app, and each release updates over the last.
+        applicationIdSuffix ".porthub"
         minSdkVersion 33
         targetSdkVersion 33
-        versionCode 10000
+        versionCode Integer.parseInt(System.getenv('PORTHUB_VERSION_CODE') ?: '10000')
         versionName "1.0.0"
 
         externalNativeBuild {

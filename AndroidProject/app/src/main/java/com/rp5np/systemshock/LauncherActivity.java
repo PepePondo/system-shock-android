@@ -43,10 +43,70 @@ public final class LauncherActivity extends Activity {
 
         if (hasGameData()) {
             launchGame();
+        } else if (PortHubImport.folderPresent()) {
+            portHubImport();
         } else {
             Log.i(TAG, "GAME_DATA_IMPORT_REQUIRED");
             showImportPrompt(null);
         }
+    }
+
+    /** Waiting for the player to allow "All files access" for the PortHub folder. */
+    private boolean askedForAccess;
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (askedForAccess) {
+            askedForAccess = false;
+            if (PortHubImport.canRead()) {
+                portHubImport();
+            } else {
+                showImportPrompt("All files access was not allowed.");
+            }
+        }
+    }
+
+    /** PortHub copied the game to Internal storage/PortHub/SystemShock/res: import it from there without a picker. */
+    private void portHubImport() {
+        if (!PortHubImport.canRead()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Allow access to the game files")
+                    .setMessage("PortHub copied System Shock to Internal storage/PortHub/SystemShock. "
+                            + "To import it from there, switch on \"All files access\" for this app on the next screen, then come back.")
+                    .setPositiveButton("Open settings", (dialog, which) -> {
+                        askedForAccess = true;
+                        startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                Uri.parse("package:" + getPackageName())));
+                    })
+                    .setNegativeButton("Pick a folder instead", (dialog, which) -> showImportPrompt(null))
+                    .setCancelable(false)
+                    .show();
+            return;
+        }
+        busyDialog = new AlertDialog.Builder(this)
+                .setTitle("Importing game data")
+                .setMessage("Copying files from PortHub/SystemShock. Do not close the app.")
+                .setCancelable(false)
+                .create();
+        busyDialog.show();
+        new Thread(() -> {
+            try {
+                long bytes = PortHubImport.importInto(getFilesDir());
+                runOnUiThread(() -> {
+                    dismissBusyDialog();
+                    Log.i(TAG, "GAME_DATA_IMPORT=PASS source=porthub bytes=" + bytes);
+                    if (hasGameData()) launchGame();
+                    else showImportPrompt("The PortHub folder's data and sound folders are empty.");
+                });
+            } catch (Exception error) {
+                Log.e(TAG, "GAME_DATA_IMPORT=FAIL source=porthub", error);
+                runOnUiThread(() -> {
+                    dismissBusyDialog();
+                    showImportPrompt("Import from PortHub/SystemShock failed: " + safeErrorMessage(error));
+                });
+            }
+        }, "SystemShockPortHubImport").start();
     }
 
     private boolean hasGameData() {

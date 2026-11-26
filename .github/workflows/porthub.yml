@@ -1,0 +1,123 @@
+# PortHub build of System Shock Android.
+# - Every Monday (or when run by hand) merges the original project's changes into the porthub branch.
+#   If the PortHub patch no longer merges cleanly, it opens an issue instead.
+# - Builds a signed APK and publishes it as the latest release, which PortHub installs.
+name: PortHub
+
+on:
+  push:
+    branches:
+      - porthub
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: porthub
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  UPSTREAM: https://github.com/raposomiguel50/system-shock-android.git
+  UPSTREAM_BRANCH: main
+
+jobs:
+  sync:
+    name: Merge upstream
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.merge.outputs.changed }}
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          ref: porthub
+          fetch-depth: 0
+
+      - name: Merge
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch "$UPSTREAM" "$UPSTREAM_BRANCH"
+          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            echo "Already up to date with upstream."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git merge --no-edit -m "Merge upstream changes" FETCH_HEAD
+          git push origin HEAD:porthub
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Report a failed merge
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create -R "$GITHUB_REPOSITORY" \
+            --title "Upstream changes no longer merge with the PortHub patch" \
+            --body "The weekly merge from $UPSTREAM ($UPSTREAM_BRANCH) failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. The last release keeps working; merge by hand to resume updates."
+
+  build:
+    name: Build and release
+    needs: sync
+    if: >-
+      always() && (github.event_name == 'push' ||
+      (needs.sync.result == 'success' &&
+      (needs.sync.outputs.changed == 'true' || github.event_name == 'workflow_dispatch')))
+    runs-on: windows-latest
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          ref: porthub
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Android SDK packages
+        shell: pwsh
+        run: |
+          $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools\latestin\sdkmanager.bat'
+          & $sdkmanager 'platforms;android-34' 'build-tools;34.0.0' 'ndk;29.0.14206865' 'cmake;3.22.1' | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "sdkmanager failed: $LASTEXITCODE" }
+
+      - name: Dependencies
+        shell: pwsh
+        run: ./scripts/bootstrap-deps.ps1
+
+      - name: Build APK
+        shell: pwsh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PORTHUB_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.PORTHUB_KEYSTORE_PASSWORD }}
+        run: |
+          $ks = Join-Path $env:RUNNER_TEMP 'porthub.jks'
+          [IO.File]::WriteAllBytes($ks, [Convert]::FromBase64String(($env:KEYSTORE_BASE64 -replace '\s','')))
+          $pw = $env:KEYSTORE_PASSWORD.Trim()
+          $env:RP5NP_RELEASE_STORE_FILE = $ks
+          $env:RP5NP_RELEASE_STORE_PASSWORD = $pw
+          $env:RP5NP_RELEASE_KEY_ALIAS = 'porthub'
+          $env:RP5NP_RELEASE_KEY_PASSWORD = $pw
+          $env:PORTHUB_VERSION_CODE = [string](20000 + [int]$env:GITHUB_RUN_NUMBER)
+          ./scripts/build.ps1 -Variant release -JavaHome $env:JAVA_HOME
+          Remove-Item $ks
+          Copy-Item AndroidProject/app/build/outputs/apk/release/app-release.apk system-shock-porthub-arm64-v8a.apk
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="porthub-$GITHUB_RUN_NUMBER"
+          gh release create "$tag" system-shock-porthub-arm64-v8a.apk -R "$GITHUB_REPOSITORY"             --target "$(git rev-parse HEAD)" --latest             --title "System Shock Android for PortHub (build $GITHUB_RUN_NUMBER)"             --notes "System Shock Android with PortHub's patch: imports the game from Internal storage/PortHub/SystemShock/res, where PortHub copies it, instead of asking for a folder. Installs next to the original app as io.github.raposomiguel50.systemshock.porthub. Android 13+, arm64. Built from $(git rev-parse --short HEAD)."
