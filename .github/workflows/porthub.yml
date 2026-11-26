@@ -1,5 +1,5 @@
 # PortHub build of System Shock Android.
-# - Every Monday (or when run by hand) merges the original project's changes into the porthub branch.
+# - When run by hand (Actions > PortHub > Run workflow) merges the original project's changes into the porthub branch.
 #   If the PortHub patch no longer merges cleanly, it opens an issue instead.
 # - Builds a signed APK and publishes it as the latest release, which PortHub installs.
 name: PortHub
@@ -8,8 +8,6 @@ on:
   push:
     branches:
       - porthub
-  schedule:
-    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -64,7 +62,7 @@ jobs:
         run: |
           gh issue create -R "$GITHUB_REPOSITORY" \
             --title "Upstream changes no longer merge with the PortHub patch" \
-            --body "The weekly merge from $UPSTREAM ($UPSTREAM_BRANCH) failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. The last release keeps working; merge by hand to resume updates."
+            --body "The merge from $UPSTREAM ($UPSTREAM_BRANCH) failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. The last release keeps working; merge by hand to resume updates."
 
   build:
     name: Build and release
